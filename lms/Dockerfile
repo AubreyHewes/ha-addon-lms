@@ -16,7 +16,7 @@ ARG BUILD_ARCH
 
 RUN apt-get -qq -y update && \
     apt-get --no-install-recommends --no-install-suggests -qq -y install \
-    patch rsync nasm make gcc g++ libc-bin zlib1g-dev libgd-dev libmodule-install-perl bzip2 build-essential pkg-config file libjpeg-dev && \
+    patch rsync nasm make gcc g++ libc-bin zlib1g-dev libgd-dev libmodule-install-perl bzip2 build-essential pkg-config file libjpeg-dev libpcre3-dev libssl-dev libluajit-5.1-dev && \
     mkdir -p /tmp/sources && \
     cd /tmp/sources && \
     git clone --depth 1 https://github.com/LMS-Community/slimserver-vendor -b public/9.1 && \
@@ -32,6 +32,37 @@ RUN apt-get -qq -y update && \
     TMPDIR=/tmp/sources/tmp ./buildme.sh && \
     mkdir -p /usr/share/squeezeboxserver/CPAN/arch/$(basename build/arch/*)/ && \
     cp -vr build/arch/*/*/ /usr/share/squeezeboxserver/CPAN/arch/$(basename build/arch/*)/
+
+RUN cd /tmp/sources && \
+    nginx_version=1.26.3 && \
+    wget -q https://nginx.org/download/nginx-${nginx_version}.tar.gz && \
+    tar xf nginx-${nginx_version}.tar.gz && \
+    git clone --depth 1 https://github.com/simpl/ngx_devel_kit.git && \
+    git clone --depth 1 https://github.com/openresty/lua-nginx-module.git && \
+    cd nginx-${nginx_version} && \
+    ./configure \
+      --prefix=/etc/nginx \
+      --sbin-path=/usr/sbin/nginx \
+      --modules-path=/usr/lib/nginx/modules \
+      --conf-path=/etc/nginx/nginx.conf \
+      --error-log-path=/proc/1/fd/1 \
+      --http-log-path=/proc/1/fd/1 \
+      --pid-path=/var/run/nginx.pid \
+      --with-compat \
+      --with-pcre-jit \
+      --with-http_ssl_module \
+      --with-http_v2_module \
+      --with-http_stub_status_module \
+      --with-http_realip_module \
+      --with-http_auth_request_module \
+      --with-http_gzip_static_module \
+      --with-stream \
+      --with-stream_ssl_module \
+      --add-dynamic-module=../ngx_devel_kit \
+      --add-dynamic-module=../lua-nginx-module && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/sources/nginx-${nginx_version}.tar.gz /tmp/sources/nginx-${nginx_version} /tmp/sources/ngx_devel_kit /tmp/sources/lua-nginx-module
 
 #ln -s /usr/include/libavformat.h build/include/libavformat.h && \
 FROM base
@@ -65,7 +96,8 @@ ENV HA_USER="squeezeboxserver"
 ENV debug=${debug}
 
 COPY rootfs/ /
-
+COPY --from=builder /usr/sbin/nginx /usr/sbin/nginx
+COPY --from=builder /usr/lib/nginx /usr/lib/nginx
 RUN apt-get -qq -y update && \
     apt-get -qq -y dist-upgrade && \
         ls -la /tmp/ && \
@@ -131,11 +163,11 @@ RUN ls -la /usr/share/squeezeboxserver/CPAN/arch/*
 # Nginx Ingress support
 RUN apt-get -qq -y update && \
     apt-get install -y --no-install-recommends \
-        libnginx-mod-http-lua \
         luarocks \
-        nginx && \
+        libpcre3 \
+        libluajit-5.1-2 && \
         luarocks install lua-resty-http 0.15-0 && \
-        rm -r /etc/nginx && \
+        rm -rf /etc/nginx && \
     apt-get autoremove && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 COPY rootfs-ingress/ /
