@@ -1,0 +1,37 @@
+FROM ghcr.io/hassio-addons/debian-base:9.3.0
+
+ARG NGINX_VERSION=1.26.3
+ARG NGINX_PAGE_SIZE=16384
+
+RUN apt-get -qq -y update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates dpkg-dev git libexpat-dev libgd-dev libluajit-5.1-dev luajit libssl-dev libxslt1-dev libxml2-dev zlib1g-dev luarocks wget pkg-config
+
+RUN set -x && cd /tmp && \
+    wget -q https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz && \
+    tar xzf nginx-${NGINX_VERSION}.tar.gz && \
+    wget -q https://downloads.sourceforge.net/project/pcre/pcre/8.45/pcre-8.45.tar.gz && \
+    tar xzf pcre-8.45.tar.gz && \
+    git clone --depth 1 https://github.com/simpl/ngx_devel_kit.git /tmp/ngx_devel_kit && \
+    git clone --depth 1 https://github.com/openresty/lua-nginx-module.git /tmp/lua-nginx-module && \
+    export LUAJIT_LIB=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH) && \
+    export LUAJIT_INC=/usr/include/luajit-2.1 && \
+    cd nginx-${NGINX_VERSION} && \
+    ./configure \
+        --with-pcre=/tmp/pcre-8.45 \
+        --sbin-path=/usr/sbin/nginx \
+        --conf-path=/etc/nginx/nginx.conf \
+        --pid-path=/run/nginx.pid \
+        --with-compat \
+        --with-cc-opt="$(dpkg-buildflags --get CFLAGS) -DNGX_PAGESIZE=${NGINX_PAGE_SIZE}" \
+        --with-ld-opt="$(dpkg-buildflags --get LDFLAGS)" \
+        --with-http_ssl_module \
+        --with-http_stub_status_module \
+        --with-http_v2_module \
+        --with-stream_ssl_module \
+        --add-dynamic-module=/tmp/ngx_devel_kit \
+        --add-dynamic-module=/tmp/lua-nginx-module && \
+    make -j$(nproc) && make install && \
+    rm -rf /tmp/nginx-${NGINX_VERSION} /tmp/pcre-8.45 /tmp/ngx_devel_kit /tmp/lua-nginx-module /tmp/nginx-${NGINX_VERSION}.tar.gz /tmp/pcre-8.45.tar.gz && \
+    ldconfig || true
+
+CMD ["/bin/bash"]

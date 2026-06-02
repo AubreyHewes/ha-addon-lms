@@ -25,6 +25,10 @@ RUN apt-get -qq -y update && \
     ln -s /usr/include/*/jconfig.h build/include/jconfig.h && \
     ln -s /usr/lib/*/libjpeg.a build/lib/libjpeg.a \
     ; fi && \
+    \
+    sed -i '/cd icu\/source/a wget -O config.guess "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess" && wget -O config.sub "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub"' buildme.sh && \
+    cat ./buildme.sh && \
+    \
     TMPDIR=/tmp/sources/tmp ./buildme.sh Media::Scan && \
     TMPDIR=/tmp/sources/tmp ./buildme.sh && \
     mkdir -p /usr/share/squeezeboxserver/CPAN/arch/$(basename build/arch/*)/ && \
@@ -61,32 +65,32 @@ ENV LMS_GROUP="nogroup"
 ENV HA_USER="squeezeboxserver"
 ENV debug=${debug}
 
-COPY rootfs/ /
+## (moved) rootfs and nginx artifacts will be copied into the final stage after the nginx-builder
 
 RUN apt-get -qq -y update && \
     apt-get -qq -y dist-upgrade && \
-        ls -la /tmp/ && \
-	apt-get -qq -y install --no-install-recommends --no-install-suggests \
-                icedax \
-		faad \
-		flac \
-		lame \
-		sox \
-		libio-socket-ssl-perl \
-		nfs-common \
-		awscli \
-		lvm2 \
-		exfat-fuse \
-		exfatprogs \
-		davfs2 \
-		sshfs \
-		cifs-utils \
-                libssl-dev \
-                mosquitto-clients \
-                psmisc \
-		tzdata && \
-		apt-get install --no-install-recommends -qy wget curl perl tzdata libwww-perl libfont-freetype-perl liblinux-inotify2-perl libdata-dump-perl libio-socket-ssl-perl libnet-ssleay-perl libcrypt-ssleay-perl libcrypt-openssl-rsa-perl lame && \
-		apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    ls -la /tmp/ && \
+    apt-get -qq -y install --no-install-recommends --no-install-suggests \
+        icedax \
+        faad \
+        flac \
+        lame \
+        sox \
+        libio-socket-ssl-perl \
+        nfs-common \
+        awscli \
+        lvm2 \
+        exfat-fuse \
+        exfatprogs \
+        davfs2 \
+        sshfs \
+        cifs-utils \
+        libssl-dev \
+        mosquitto-clients \
+        psmisc \
+        tzdata \
+        wget curl perl libwww-perl libfont-freetype-perl liblinux-inotify2-perl libdata-dump-perl libio-socket-ssl-perl libnet-ssleay-perl libcrypt-ssleay-perl libcrypt-openssl-rsa-perl && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Debug packages
 RUN if [ "${debug}" = "true " ];then touch /debug && apt-get update && apt-get upgrade -y -o Dpkg::Options::="--force-confold" && apt-get --no-install-recommends --no-install-suggests -qq -y install vim-tiny procps && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*;fi
@@ -126,15 +130,111 @@ RUN ls -la /usr/share/squeezeboxserver/CPAN/arch/*
 #        wget $latest_lms && \
 
 # Nginx Ingress support
+# Use the current Debian 13 nginx-full source release so the tarball is still available.
+ARG NGINX_VERSION=1.26.3
+ARG NGINX_PAGE_SIZE=16384
+FROM base AS nginx-builder
+ARG NGINX_VERSION=1.26.3
+ARG NGINX_PAGE_SIZE=16384
 RUN apt-get -qq -y update && \
     apt-get install -y --no-install-recommends \
-        libnginx-mod-http-lua \
+        build-essential \
+        ca-certificates \
+        dpkg-dev \
+        git \
+        libexpat-dev \
+        libgd-dev \
+        libluajit-5.1-dev \
+        luajit \
+        libssl-dev \
+        libxslt1-dev \
+        libxml2-dev \
+        zlib1g-dev \
         luarocks \
-        nginx && \
-        luarocks install lua-resty-http 0.15-0 && \
-        rm -r /etc/nginx && \
-    apt-get autoremove && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+        wget
+
+RUN set +x && cd /tmp && \
+    wget -q https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz && \
+    tar xzf nginx-${NGINX_VERSION}.tar.gz && \
+    wget -q https://downloads.sourceforge.net/project/pcre/pcre/8.45/pcre-8.45.tar.gz && \
+    tar xzf pcre-8.45.tar.gz && \
+    cd pcre-8.45 && \
+    ./configure --prefix=/usr/local --enable-jit --enable-utf --enable-unicode-properties --enable-shared && \
+    make -j$(nproc) && make install && cd .. && \
+    git clone --depth 1 https://github.com/simpl/ngx_devel_kit.git /tmp/ngx_devel_kit && \
+    git clone --depth 1 https://github.com/openresty/lua-nginx-module.git /tmp/lua-nginx-module && \
+    export LUAJIT_LIB=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH) && \
+    export LUAJIT_INC=/usr/include/luajit-2.1 && \
+    export CPPFLAGS="-I/usr/local/include -fPIC" && \
+    export LDFLAGS="-L/usr/local/lib $(dpkg-buildflags --get LDFLAGS)" && \
+    cd nginx-${NGINX_VERSION} && \
+    ./configure \
+        --sbin-path=/usr/sbin/nginx \
+        --conf-path=/etc/nginx/nginx.conf \
+        --pid-path=/run/nginx.pid \
+        --lock-path=/var/lock/nginx.lock \
+        --error-log-path=/var/log/nginx/error.log \
+        --http-log-path=/var/log/nginx/access.log \
+        --modules-path=/usr/lib/nginx/modules \
+        --http-client-body-temp-path=/var/lib/nginx/body \
+        --http-fastcgi-temp-path=/var/lib/nginx/fastcgi \
+        --http-proxy-temp-path=/var/lib/nginx/proxy \
+        --http-scgi-temp-path=/var/lib/nginx/scgi \
+        --http-uwsgi-temp-path=/var/lib/nginx/uwsgi \
+        --with-compat \
+        --with-cc-opt="$(dpkg-buildflags --get CFLAGS) -fPIC -DNGX_PAGESIZE=${NGINX_PAGE_SIZE}" \
+        --with-ld-opt="-Wl,-E -lpcre $(dpkg-buildflags --get LDFLAGS)" \
+        --with-debug \
+        --with-pcre=../pcre-8.45 \
+        --with-pcre-jit \
+        --with-ipv6 \
+        --with-http_ssl_module \
+        --with-http_stub_status_module \
+        --with-http_realip_module \
+        --with-http_auth_request_module \
+        --with-http_v2_module \
+        --with-http_dav_module \
+        --with-http_slice_module \
+        --with-threads \
+        --with-http_addition_module \
+        --with-http_gunzip_module \
+        --with-http_gzip_static_module \
+        --with-http_image_filter_module=dynamic \
+        --with-http_sub_module \
+        --with-http_xslt_module=dynamic \
+        --with-stream=dynamic \
+        --with-stream_ssl_module \
+        --with-mail=dynamic \
+        --with-mail_ssl_module \
+        --add-dynamic-module=/tmp/ngx_devel_kit \
+        --add-dynamic-module=/tmp/lua-nginx-module && \
+    make -j$(nproc) && \
+    make install && \
+    mkdir -p /nginx-built/modules && \
+    cp -v /usr/lib/nginx/modules/*.so /nginx-built/modules/ 2>/dev/null || true && \
+    mkdir -p /nginx-built/libs && \
+    cp -v /usr/local/lib/libpcre* /nginx-built/libs/ 2>/dev/null || true && \
+    rm -rf /tmp/nginx-${NGINX_VERSION} /tmp/pcre-8.45 /tmp/ngx_devel_kit /tmp/lua-nginx-module /tmp/nginx-${NGINX_VERSION}.tar.gz /tmp/pcre-8.45.tar.gz
+
+FROM base
+
+# Final stage: copy runtime files and nginx artifacts from builder
+COPY rootfs/ /
+COPY --from=nginx-builder /usr/sbin/nginx /usr/sbin/nginx
+COPY --from=nginx-builder /nginx-built/modules/ /usr/lib/nginx/modules/
+COPY --from=nginx-builder /nginx-built/libs/ /usr/local/lib/
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/nginx-pcre.conf && ldconfig || true
+RUN ls -la /usr/lib/nginx/modules || true
+
+RUN set +x && \
+    apt-get -qq -y update && \
+    apt-get install -y --no-install-recommends luarocks libluajit-5.1-2 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
+    luarocks install lua-resty-http 0.15-0
+
+# Ensure nginx log dir exists so nginx can open error log
+RUN mkdir -p /var/log/nginx || true
+
 COPY rootfs-ingress/ /
 
 # osync
@@ -158,8 +258,10 @@ RUN apt-get -qq -y update && \
     apt-get autoremove && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Patching
-RUN for i in /patch/*.patch;do patch -d / -p1 -i $i;done && rm -r /patch
+# Patching (run only if patch files are present)
+RUN if ls /patch/*.patch 1> /dev/null 2>&1; then \
+            for i in /patch/*.patch; do patch -d / -p1 -i "$i"; done; \
+        fi && rm -rf /patch || true
 
 #Cleanup
 RUN if [ -z "${debug}" -o "${debug}" = "false" ];then apt-get -y remove \

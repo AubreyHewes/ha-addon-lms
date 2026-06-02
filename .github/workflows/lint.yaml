@@ -3,12 +3,10 @@ name: Lint
 on:
   push:
     branches:
-      - main
-      - next
+      - feature/nginx-16k
   pull_request:
     branches:
-      - main
-      - next
+      - feature/nginx-16k
   schedule:
     - cron: "0 0 * * *"
 

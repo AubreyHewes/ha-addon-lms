@@ -4,16 +4,13 @@ env:
   MONITORED_FILES: "config.json config.yaml config.yml Dockerfile rootfs rootfs-ingress"
 
 on:
-  pull_request:
-    branches:
-      - main
   push:
     branches:
-      - main
-      - next
+      - feature/nginx-16k
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   init:
@@ -40,7 +37,7 @@ jobs:
           APPS: ${{ steps.apps.outputs.addons }}
           CHANGED_FILES: ${{ steps.changed_files.outputs.all_changed_files }}
         run: |
-          changed_apps=()
+          changed_apps=(${APPS})
 
           # If the workflow file itself changed, rebuild all apps
           if [[ "${CHANGED_FILES}" =~ \.github/workflows/(builder|build-app)\.yaml ]]; then
@@ -77,9 +74,53 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: ${{ fromJSON(needs.init.outputs.changed_apps) }}
+        app: ${{ fromJson(needs.init.outputs.changed_apps) }}
     uses: ./.github/workflows/build-app.yaml
     with:
       app: ${{ matrix.app }}
       publish: ${{ github.event_name == 'push' }}
     secrets: inherit
+    
+    # steps:
+    #   - name: Check out repository
+    #     uses: actions/checkout@v6.0.2
+
+    #   - name: Get information
+    #     id: info
+    #     uses: home-assistant/actions/helpers/info@master
+    #     with:
+    #       path: "./${{ matrix.addon }}"
+
+    #   - name: Check if add-on should be built
+    #     id: check
+    #     run: |
+    #       if [[ "${{ steps.info.outputs.architectures }}" =~ ${{ matrix.arch }} ]]; then
+    #          echo "::set-output name=build_arch::true";
+    #          echo "::set-output name=image::$(echo ${{ steps.info.outputs.image }} | cut -d'/' -f3)";
+    #          if [[ -z "${{ github.head_ref }}" ]] && [[ "${{ github.event_name }}" == "push" ]]; then
+    #              echo "BUILD_ARGS=" >> $GITHUB_ENV;
+    #          fi
+    #        else
+    #          echo "${{ matrix.arch }} is not a valid arch for ${{ matrix.addon }}, skipping build";
+    #          echo "::set-output name=build_arch::false";
+    #       fi
+
+    #   - name: Login to GitHub Container Registry
+    #     if: env.BUILD_ARGS != '--test'
+    #     uses: docker/login-action@v4.2.0
+    #     with:
+    #       registry: ghcr.io
+    #       username: ${{ github.repository_owner }}
+    #       password: ${{ secrets.GITHUB_TOKEN }}
+
+    #   - name: Build ${{ matrix.addon }} add-on
+    #     if: steps.check.outputs.build_arch == 'true'
+    #     uses: home-assistant/builder@2026.03.2
+    #     with:
+    #       args: |
+    #         ${{ env.BUILD_ARGS }} \
+    #         --${{ matrix.arch }} \
+    #         --target /data/${{ matrix.addon }} \
+    #         --image "${{ steps.check.outputs.image }}" \
+    #         --docker-hub "ghcr.io/${{ github.repository_owner }}" \
+    #         --addon
